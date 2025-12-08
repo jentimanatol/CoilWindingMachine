@@ -1,0 +1,3 @@
+# Automated Coil-Winding Machine — ESP32-C6 Web-Controlled System
+UMass Lowell 2025 Portfolio Project
+...
