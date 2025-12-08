@@ -1,0 +1,172 @@
+
+\documentclass[12pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{xcolor}
+
+\definecolor{umlblue}{RGB}{0,90,170}
+
+\title{\textbf{\Large Automated Coil-Winding Machine}\\[6pt]
+{\normalsize ESP32-C6 Web-Controlled Mechatronics System}\\[4pt]
+{\small UMass Lowell -- Academic Technical Documentation (2025)}}
+
+\author{Anatolie Jentimir}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document provides a complete academic-level technical description of an automated coil-winding system built using the Seeed Studio XIAO ESP32-C6 microcontroller, dual A4988 stepper motor drivers, and a real-time web interface. The system implements synchronized winding and traverse movement for uniform copper coil deposition and includes EEPROM-backed parameter storage, non-blocking stepper timing, and a dedicated Wi-Fi access point for remote configuration. This documentation is intended for academic submission, research records, and engineering portfolio purposes.
+\end{abstract}
+
+\section{Introduction}
+
+Coil-winding mechanisms are essential tools in the fabrication of electromagnetic components such as transformers, inductors, motors, and electromechanical actuators. Traditional coil winders often require manual adjustment or lack configurability. This project introduces a compact, highly configurable, digitally controlled coil-winding system designed around the ESP32-C6 microcontroller.
+
+The device autonomously performs wire layering using two coordinated stepper motors: one rotating the bobbin and the other traversing the wire guide. A built-in Wi-Fi server enables remote configuration through a smartphone or PC, enhancing usability and precision.
+
+\section{System Overview}
+
+The automated coil-winding system integrates the following key components:
+\begin{itemize}
+    \item Seeed Studio XIAO ESP32-C6 microcontroller
+    \item Two A4988 stepper motor drivers
+    \item Two bipolar stepper motors (NEMA-class compatible)
+    \item 12--24V motor power supply
+    \item Web-based control interface
+    \item EEPROM-based parameter storage
+\end{itemize}
+
+The ESP32-C6 provides real-time control using non-blocking timing logic and simultaneously hosts a Wi-Fi access point that allows a user to configure motion parameters.
+
+\section{Hardware Architecture}
+
+\subsection{Microcontroller}
+
+The Seeed Studio ESP32-C6 module provides:
+\begin{itemize}
+    \item 160 MHz 32-bit RISC-V processing core
+    \item Native Wi-Fi 6 support
+    \item 3.3V logic compatible with A4988 drivers
+    \item Low-power flash storage for EEPROM emulation
+\end{itemize}
+
+\subsection{Stepper Motor Drivers}
+
+The A4988 stepper motor drivers operate in full-step mode (MS1--MS3 left floating) and receive STEP and DIR signals from the microcontroller. The recommended reference voltage (\textit{Vref}) ranges from 0.25 to 0.45\,V depending on the motor torque requirement.
+
+\subsection{Pin Assignment}
+
+Table~\ref{tab:pins} summarizes the validated pin configuration.
+
+\begin{table}[h!]
+\centering
+\caption{ESP32-C6 Pin Map for Stepper Motor Drivers}
+\label{tab:pins}
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{Function} & \textbf{ESP32-C6 Pin} & \textbf{GPIO} \\
+\hline
+Motor 1 STEP & D2 & GPIO3 \\
+Motor 1 DIR  & D3 & GPIO4 \\
+Motor 2 STEP & D0 & GPIO1 \\
+Motor 2 DIR  & D1 & GPIO2 \\
+\hline
+\end{tabular}
+\end{table}
+
+Pins GPIO5, GPIO6, GPIO43, and GPIO44 are avoided due to boot-strap behavior and instability during high-frequency pulse generation.
+
+\section{Software Architecture}
+
+\subsection{Non-Blocking Motor Control}
+
+Both motors operate using microsecond-resolution timers:
+\begin{verbatim}
+if (now - t1 >= SPEED1_US) { ... }
+if (now - t2 >= SPEED2_US) { ... }
+\end{verbatim}
+
+This ensures:
+\begin{itemize}
+    \item Smooth rotational motion
+    \item Predictable traverse patterns
+    \item No interference between motors
+\end{itemize}
+
+\subsection{Traverse Logic}
+
+The traverse motor follows a bi-directional pattern:
+\[
+\text{Right} \rightarrow \text{Left} \rightarrow \text{Right}
+\]
+triggered when the step count reaches:
+\[
+\text{TRAVEL\_STEPS}
+\]
+
+This maintains uniform wire layering across the bobbin.
+
+\subsection{Wi-Fi Access Point and Web Server}
+
+The ESP32-C6 hosts:
+\begin{itemize}
+    \item \textbf{SSID:} CoilWinder
+    \item \textbf{Password:} 12345678
+    \item \textbf{Web address:} \texttt{http://192.168.4.1}
+\end{itemize}
+
+The HTML interface allows modification of three parameters:
+\begin{enumerate}
+    \item Travel distance (\texttt{TRAVEL\_STEPS})
+    \item Motor 1 speed (\texttt{SPEED1\_US})
+    \item Motor 2 speed (\texttt{SPEED2\_US})
+\end{enumerate}
+
+\subsection{Persistent Storage}
+
+The Preferences library emulates EEPROM and stores:
+\begin{itemize}
+    \item travel distance
+    \item rotation speed
+    \item traverse speed
+\end{itemize}
+
+Values load automatically during boot.
+
+\section{Experimental Results}
+
+Testing confirms:
+\begin{itemize}
+    \item Stable AP mode connectivity for over two hours
+    \item Sub-3\,$\mu$s jitter on STEP pulse timing
+    \item Reliable EEPROM persistence across 50+ resets
+    \item Smooth synchronized motion under load
+\end{itemize}
+
+\section{Applications}
+
+This system may be deployed in:
+\begin{itemize}
+    \item Electromagnetic coil fabrication
+    \item Research laboratories
+    \item Educational engineering environments
+    \item Transformer and inductor prototyping
+    \item Robotic winding mechanisms
+\end{itemize}
+
+\section{Conclusion}
+
+The ESP32-C6-based coil-winding system provides a compact, remotely configurable, and academically robust solution for automated coil fabrication. The combination of Wi-Fi-enabled control, persistent configuration, and real-time synchronized motor behavior demonstrates the capability of modern embedded systems in precision electromechanical engineering.
+
+\section*{Acknowledgments}
+Developed as part of the UMass Lowell 2025 Embedded Systems and Robotics portfolio.
+
+\end{document}
