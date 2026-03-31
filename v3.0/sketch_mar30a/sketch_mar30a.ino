@@ -2,55 +2,62 @@
 #include <WebServer.h>
 #include <Preferences.h>
 
-// ============================
-// Motor Pins
-// ============================
-const int STEP1 = 2;   // spindle motor step
-const int DIR1  = 3;   // spindle motor dir
-
-const int STEP2 = 0;   // traverse motor step
-const int DIR2  = 1;   // traverse motor dir
-
-// ============================
-// Hall Sensors
-// ============================
-const int LEFT_SENSOR  = 4;
-const int RIGHT_SENSOR = 5;
-
-// ============================
-// Motion Parameters
-// ============================
-volatile int SPEED1_US = 8000;   // spindle interval
-volatile int SPEED2_US = 10000;   // traverse interval
-
-const unsigned int STEP_PULSE_US = 4;
-
-// ============================
-// WiFi / Preferences
-// ============================
-const char* AP_SSID = "CoilWinder";
-const char* AP_PASS = "12345678";
-
-WebServer server(80);
+// ======================================================
+// EEPROM-LIKE STORAGE USING PREFERENCES
+// ======================================================
 Preferences prefs;
 
-// ============================
-// Motion State
-// ============================
-bool traverseRight = true;
+// ======================================================
+// CONFIG VALUES
+// ======================================================
+int SPEED1_US = 1500;
+int SPEED2_US = 2000;
+
+// ======================================================
+// MOTOR PINS
+// ======================================================
+#define STEP1 2
+#define DIR1  3
+
+#define STEP2 0
+#define DIR2  1
+
+// ======================================================
+// SENSOR PINS
+// ======================================================
+#define LEFT_SENSOR  6
+#define RIGHT_SENSOR 7
+
+// ======================================================
+// STEP PULSE WIDTH
+// ======================================================
+#define STEP_PULSE_US 200
+
+// ======================================================
+// MOTOR INTERNAL VARIABLES
+// ======================================================
+unsigned long t1 = 0;
+unsigned long t2 = 0;
+
+bool traverseDir = true;     // true = right, false = left
 bool machineRunning = false;
 
-unsigned long lastStep1Time = 0;
-unsigned long lastStep2Time = 0;
-unsigned long lastReverseTime = 0;
-
+unsigned long lastReverseMs = 0;
 const unsigned long REVERSE_LOCKOUT_MS = 120;
 
-// ============================
-// Sensor Logic
-// ============================
-// If your KY-003 modules are opposite polarity,
-// change LOW to HIGH in these functions.
+// ======================================================
+// WIFI ACCESS POINT
+// ======================================================
+const char* ssid = "CoilWinder";
+const char* password = "12345678";
+
+WebServer server(80);
+
+// ======================================================
+// SENSOR FUNCTIONS
+// ======================================================
+// KY-003 is often ACTIVE LOW when magnet is detected.
+// If your logic is inverted, change LOW to HIGH.
 bool leftTriggered() {
   return digitalRead(LEFT_SENSOR) == LOW;
 }
@@ -59,235 +66,124 @@ bool rightTriggered() {
   return digitalRead(RIGHT_SENSOR) == LOW;
 }
 
-// ============================
-// Reverse Traverse
-// ============================
-void reverseTraverse(bool goRight) {
-  traverseRight = goRight;
-  digitalWrite(DIR2, traverseRight ? HIGH : LOW);
-  lastReverseTime = millis();
-}
-
-// ============================
-// HTML
-// ============================
-String sensorBadge(bool active) {
+// ======================================================
+// HTML PAGE
+// ======================================================
+String badge(bool active) {
   if (active) {
-    return "<span style='color:#ffffff;background:#16a34a;padding:6px 12px;border-radius:999px;font-weight:bold;'>DETECTED</span>";
+    return "<span style='background:#16a34a;color:white;padding:6px 12px;border-radius:12px;font-weight:bold;'>DETECTED</span>";
   }
-  return "<span style='color:#111827;background:#e5e7eb;padding:6px 12px;border-radius:999px;font-weight:bold;'>IDLE</span>";
+  return "<span style='background:#374151;color:white;padding:6px 12px;border-radius:12px;font-weight:bold;'>IDLE</span>";
 }
 
 String htmlPage() {
-  String html = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="1">
-  <title>Coil Winding Machine</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f5f7fb;
-      margin: 0;
-      padding: 20px;
-      color: #111827;
-    }
-    .container {
-      max-width: 760px;
-      margin: auto;
-    }
-    h1 {
-      margin-bottom: 8px;
-      font-size: 28px;
-    }
-    .subtitle {
-      color: #6b7280;
-      margin-bottom: 18px;
-    }
-    .card {
-      background: white;
-      border-radius: 16px;
-      padding: 18px;
-      margin-bottom: 16px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-    .item {
-      background: #f9fafb;
-      border-radius: 12px;
-      padding: 12px;
-    }
-    .label {
-      font-size: 13px;
-      color: #6b7280;
-      margin-bottom: 6px;
-    }
-    .value {
-      font-size: 20px;
-      font-weight: bold;
-    }
-    label {
-      display: block;
-      margin-top: 12px;
-      margin-bottom: 6px;
-      font-weight: bold;
-    }
-    input[type=number] {
-      width: 100%;
-      padding: 12px;
-      border-radius: 10px;
-      border: 1px solid #d1d5db;
-      box-sizing: border-box;
-      font-size: 16px;
-    }
-    .btn {
-      display: inline-block;
-      padding: 12px 18px;
-      border: none;
-      border-radius: 12px;
-      font-size: 16px;
-      font-weight: bold;
-      cursor: pointer;
-      margin-top: 12px;
-      margin-right: 8px;
-    }
-    .run  { background: #16a34a; color: white; }
-    .stop { background: #dc2626; color: white; }
-    .save { background: #2563eb; color: white; width: 100%; }
-    .warn {
-      margin-top: 12px;
-      padding: 12px;
-      border-radius: 12px;
-      background: #fff7ed;
-      color: #9a3412;
-      font-size: 14px;
-    }
-    .footer {
-      text-align: center;
-      color: #6b7280;
-      font-size: 13px;
-      margin-top: 10px;
-    }
-    @media (max-width: 640px) {
-      .grid {
-        grid-template-columns: 1fr;
-      }
-      .btn {
-        width: 100%;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>Coil Winding Machine</h1>
-    <div class="subtitle">Sensor-based traverse control with Wi-Fi setup panel</div>
+  String page = "<html><head><title>Coil Winder</title>";
+  page += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  page += "<meta http-equiv='refresh' content='1'>";
+  page += "<style>";
+  page += "body{font-family:Arial;background:#111;color:white;padding:20px;max-width:800px;margin:auto;}";
+  page += ".logo{font-size:28px;font-weight:bold;text-align:center;color:#4da6ff;margin-bottom:15px;}";
+  page += ".card{background:#1f2937;padding:18px;border-radius:16px;margin-bottom:16px;}";
+  page += ".grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}";
+  page += ".box{background:#111827;padding:14px;border-radius:12px;}";
+  page += ".label{font-size:13px;color:#9ca3af;margin-bottom:6px;}";
+  page += ".value{font-size:22px;font-weight:bold;}";
+  page += "input{width:100%;font-size:18px;padding:10px;border-radius:10px;border:none;box-sizing:border-box;}";
+  page += "button{font-size:18px;padding:12px 18px;border:none;border-radius:12px;cursor:pointer;margin-top:10px;}";
+  page += ".run{background:#16a34a;color:white;margin-right:8px;}";
+  page += ".stop{background:#dc2626;color:white;}";
+  page += ".save{background:#2563eb;color:white;width:100%;margin-top:16px;}";
+  page += ".warn{background:#3f1d1d;color:#fca5a5;padding:12px;border-radius:12px;margin-top:12px;font-size:14px;}";
+  page += "@media(max-width:640px){.grid{grid-template-columns:1fr;}}";
+  page += "</style></head><body>";
 
-    <div class="card">
-      <div class="grid">
-        <div class="item">
-          <div class="label">Machine Status</div>
-          <div class="value">%RUNSTATE%</div>
-        </div>
-        <div class="item">
-          <div class="label">Traverse Direction</div>
-          <div class="value">%DIRSTATE%</div>
-        </div>
-        <div class="item">
-          <div class="label">Left Sensor</div>
-          <div class="value">%LEFTSTATE%</div>
-        </div>
-        <div class="item">
-          <div class="label">Right Sensor</div>
-          <div class="value">%RIGHTSTATE%</div>
-        </div>
-      </div>
+  page += "<div class='logo'>UMass Lowell — 2025</div>";
+  page += "<h2>Coil Winder Control</h2>";
 
-      <form action="/run" method="GET" style="display:inline;">
-        <button class="btn run" type="submit">Run Machine</button>
-      </form>
+  page += "<div class='card'><div class='grid'>";
 
-      <form action="/stop" method="GET" style="display:inline;">
-        <button class="btn stop" type="submit">Stop Machine</button>
-      </form>
+  page += "<div class='box'><div class='label'>Machine Status</div><div class='value'>";
+  page += machineRunning ? "RUNNING" : "STOPPED";
+  page += "</div></div>";
 
-      <div class="warn">
-        This version reverses only from the hall sensors. If a sensor or magnet fails, the carriage will not auto-stop.
-      </div>
-    </div>
+  page += "<div class='box'><div class='label'>Traverse Direction</div><div class='value'>";
+  page += traverseDir ? "RIGHT" : "LEFT";
+  page += "</div></div>";
 
-    <div class="card">
-      <form action="/save" method="GET">
-        <label for="speed1">Spindle Speed (microseconds)</label>
-        <input type="number" id="speed1" name="speed1" min="100" value="%SPEED1%">
+  page += "<div class='box'><div class='label'>Left Sensor</div><div class='value'>";
+  page += badge(leftTriggered());
+  page += "</div></div>";
 
-        <label for="speed2">Traverse Speed (microseconds)</label>
-        <input type="number" id="speed2" name="speed2" min="100" value="%SPEED2%">
+  page += "<div class='box'><div class='label'>Right Sensor</div><div class='value'>";
+  page += badge(rightTriggered());
+  page += "</div></div>";
 
-        <button class="btn save" type="submit">Save Settings</button>
-      </form>
-    </div>
+  page += "</div>";
 
-    <div class="footer">
-      Wi-Fi AP: CoilWinder
-    </div>
-  </div>
-</body>
-</html>
-)rawliteral";
+  page += "<form action='/run' method='GET' style='display:inline;'>";
+  page += "<button class='run' type='submit'>Run Machine</button></form>";
 
-  html.replace("%RUNSTATE%", machineRunning ? "RUNNING" : "STOPPED");
-  html.replace("%DIRSTATE%", traverseRight ? "RIGHT" : "LEFT");
-  html.replace("%LEFTSTATE%", sensorBadge(leftTriggered()));
-  html.replace("%RIGHTSTATE%", sensorBadge(rightTriggered()));
-  html.replace("%SPEED1%", String(SPEED1_US));
-  html.replace("%SPEED2%", String(SPEED2_US));
+  page += "<form action='/stop' method='GET' style='display:inline;'>";
+  page += "<button class='stop' type='submit'>Stop Machine</button></form>";
 
-  return html;
+  page += "<div class='warn'>This version reverses only from the two hall sensors. If a sensor or magnet fails, the carriage will not auto-stop.</div>";
+  page += "</div>";
+
+  page += "<div class='card'>";
+  page += "<form action='/save' method='GET'>";
+  page += "Speed Motor 1 (us):<br><input name='s1' value='" + String(SPEED1_US) + "'><br><br>";
+  page += "Speed Motor 2 (us):<br><input name='s2' value='" + String(SPEED2_US) + "'><br><br>";
+  page += "<button class='save' type='submit'>Save Settings</button>";
+  page += "</form></div>";
+
+  page += "</body></html>";
+  return page;
 }
 
-// ============================
-// Web Handlers
-// ============================
+// ======================================================
+// WEB HANDLERS
+// ======================================================
 void handleRoot() {
   server.send(200, "text/html", htmlPage());
 }
 
 void handleSave() {
-  if (server.hasArg("speed1")) SPEED1_US = server.arg("speed1").toInt();
-  if (server.hasArg("speed2")) SPEED2_US = server.arg("speed2").toInt();
+  if (server.hasArg("s1")) SPEED1_US = server.arg("s1").toInt();
+  if (server.hasArg("s2")) SPEED2_US = server.arg("s2").toInt();
 
-  prefs.begin("coilcfg", false);
   prefs.putInt("speed1", SPEED1_US);
   prefs.putInt("speed2", SPEED2_US);
-  prefs.end();
 
-  server.sendHeader("Location", "/");
-  server.send(303);
+  server.send(200, "text/html", "<h2>Saved!</h2><a href='/'>Back</a>");
 }
 
 void handleRun() {
   machineRunning = true;
   server.sendHeader("Location", "/");
-  server.send(303);
+  server.send(303, "text/plain", "");
 }
 
 void handleStop() {
   machineRunning = false;
   server.sendHeader("Location", "/");
-  server.send(303);
+  server.send(303, "text/plain", "");
 }
 
-// ============================
-// Setup
-// ============================
+// ======================================================
+// SETUP
+// ======================================================
 void setup() {
+  Serial.begin(115200);
+  delay(200);
+
+  prefs.begin("coil", false);
+  SPEED1_US = prefs.getInt("speed1", SPEED1_US);
+  SPEED2_US = prefs.getInt("speed2", SPEED2_US);
+
+  Serial.println("Loaded EEPROM values:");
+  Serial.println(SPEED1_US);
+  Serial.println(SPEED2_US);
+
   pinMode(STEP1, OUTPUT);
   pinMode(DIR1, OUTPUT);
   pinMode(STEP2, OUTPUT);
@@ -296,64 +192,73 @@ void setup() {
   pinMode(LEFT_SENSOR, INPUT_PULLUP);
   pinMode(RIGHT_SENSOR, INPUT_PULLUP);
 
-  digitalWrite(DIR1, HIGH);   // spindle fixed direction
-  digitalWrite(DIR2, HIGH);   // traverse starts to the right
-  traverseRight = true;
+  digitalWrite(DIR1, HIGH);
+  digitalWrite(DIR2, HIGH);
+  traverseDir = true;
 
-  prefs.begin("coilcfg", true);
-  SPEED1_US = prefs.getInt("speed1", 1500);
-  SPEED2_US = prefs.getInt("speed2", 2000);
-  prefs.end();
-
-  WiFi.softAP(AP_SSID, AP_PASS);
+  WiFi.softAP(ssid, password);
+  Serial.print("AP IP: ");
+  Serial.println(WiFi.softAPIP());
 
   server.on("/", handleRoot);
   server.on("/save", handleSave);
   server.on("/run", handleRun);
   server.on("/stop", handleStop);
   server.begin();
+
+  Serial.println("Web server started!");
 }
 
-// ============================
-// Step Pulse Helper
-// ============================
-void pulseStepPin(int pin) {
-  digitalWrite(pin, HIGH);
-  delayMicroseconds(STEP_PULSE_US);
-  digitalWrite(pin, LOW);
-}
-
-// ============================
-// Loop
-// ============================
+// ======================================================
+// MAIN LOOP
+// ======================================================
 void loop() {
   server.handleClient();
 
   if (!machineRunning) return;
 
-  unsigned long nowMicros = micros();
-  unsigned long nowMillis = millis();
+  unsigned long now = micros();
+  unsigned long nowMs = millis();
 
-  // Reverse only by sensors
-  bool lockoutExpired = (nowMillis - lastReverseTime) > REVERSE_LOCKOUT_MS;
-
-  if (lockoutExpired) {
-    if (traverseRight && rightTriggered()) {
-      reverseTraverse(false);
-    } else if (!traverseRight && leftTriggered()) {
-      reverseTraverse(true);
+  // ----------------------------------------------------
+  // SENSOR-BASED REVERSE
+  // ----------------------------------------------------
+  if (nowMs - lastReverseMs > REVERSE_LOCKOUT_MS) {
+    if (traverseDir && rightTriggered()) {
+      traverseDir = false;
+      digitalWrite(DIR2, LOW);
+      lastReverseMs = nowMs;
+      Serial.println("Right sensor triggered -> moving LEFT");
+    }
+    else if (!traverseDir && leftTriggered()) {
+      traverseDir = true;
+      digitalWrite(DIR2, HIGH);
+      lastReverseMs = nowMs;
+      Serial.println("Left sensor triggered -> moving RIGHT");
     }
   }
 
-  // Spindle motor
-  if ((long)(nowMicros - lastStep1Time) >= SPEED1_US) {
-    lastStep1Time = nowMicros;
-    pulseStepPin(STEP1);
+  // ----------------------------------------------------
+  // MOTOR 1 — BOBBIN ROTATION
+  // ----------------------------------------------------
+  if (now - t1 >= (unsigned long)SPEED1_US) {
+    t1 = now;
+
+    digitalWrite(STEP1, HIGH);
+    delayMicroseconds(STEP_PULSE_US);
+    digitalWrite(STEP1, LOW);
+    delayMicroseconds(STEP_PULSE_US);
   }
 
-  // Traverse motor
-  if ((long)(nowMicros - lastStep2Time) >= SPEED2_US) {
-    lastStep2Time = nowMicros;
-    pulseStepPin(STEP2);
+  // ----------------------------------------------------
+  // MOTOR 2 — TRAVERSE
+  // ----------------------------------------------------
+  if (now - t2 >= (unsigned long)SPEED2_US) {
+    t2 = now;
+
+    digitalWrite(STEP2, HIGH);
+    delayMicroseconds(STEP_PULSE_US);
+    digitalWrite(STEP2, LOW);
+    delayMicroseconds(STEP_PULSE_US);
   }
 }
